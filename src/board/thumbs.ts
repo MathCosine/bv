@@ -4,7 +4,13 @@ import { PAGE_W, type PageRef, type Stroke } from '../lib/types'
 import { drawPaper } from './paper'
 
 /** A small picture of one page with its ink, for the page grid. */
-export async function renderThumb(page: PageRef, doc: PDFDocumentProxy | null, strokes: Stroke[], width: number): Promise<HTMLCanvasElement> {
+export async function renderThumb(
+  page: PageRef,
+  doc: PDFDocumentProxy | null,
+  strokes: Stroke[],
+  width: number,
+  image?: (path: string) => Promise<CanvasImageSource>,
+): Promise<HTMLCanvasElement> {
   const dpr = Math.min(2, window.devicePixelRatio || 1)
   const px = Math.round(width * dpr)
   const h = (PAGE_W * page.h) / page.w
@@ -12,6 +18,12 @@ export async function renderThumb(page: PageRef, doc: PDFDocumentProxy | null, s
   let c: HTMLCanvasElement
   if (page.kind === 'pdf' && doc) {
     c = await renderPageToCanvas(doc, page.n, px)
+  } else if (page.kind === 'image' && image) {
+    c = document.createElement('canvas')
+    c.width = px
+    c.height = Math.round(h * k)
+    const ctx = c.getContext('2d')!
+    ctx.drawImage(await image(page.path), 0, 0, c.width, c.height)
   } else {
     c = document.createElement('canvas')
     c.width = px

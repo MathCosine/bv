@@ -343,6 +343,13 @@ select {
   box-shadow: 0 0 0 2px var(--sheet), 0 0 0 3.5px var(--ink);
 }
 .sw-graphite { background: #24221f !important; }
+.card-sw { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.22) !important; border-radius: 4px !important; }
+.card-sw.on { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.22), 0 0 0 2px var(--sheet), 0 0 0 3.5px var(--ink) !important; }
+.card-sw-paper { background: #fffdf8 !important; }
+.card-sw-yellow { background: #fff2ad !important; }
+.card-sw-blue { background: #e1ecf8 !important; }
+.card-sw-green { background: #e1f0da !important; }
+.card-sw-pink { background: #fce2e9 !important; }
 .sw-red { background: var(--red) !important; }
 .sw-blue { background: var(--blue) !important; }
 .sw-green { background: var(--green) !important; }
@@ -909,6 +916,9 @@ select {
   transform: translate(-50%, -100%);
   white-space: nowrap;
 }
+.sel-bar.below {
+  transform: translate(-50%, 0);
+}
 .sel-bar .sw {
   width: 22px;
   height: 22px;
@@ -1037,9 +1047,9 @@ select {
   flex: none;
   container-type: inline-size;
   background:
-    linear-gradient(var(--rule) 1px, transparent 1px) 0 0 / 22px 22px,
-    linear-gradient(90deg, var(--rule) 1px, transparent 1px) 0 0 / 22px 22px,
-    #fbf8f1;
+    linear-gradient(rgba(70, 120, 170, 0.12) 1px, transparent 1px) 0 0 / 22px 22px,
+    linear-gradient(90deg, rgba(70, 120, 170, 0.12) 1px, transparent 1px) 0 0 / 22px 22px,
+    #f4efe4;
   border-left: 1px solid var(--line-2);
   overflow: hidden auto;
 }
@@ -1288,45 +1298,65 @@ select {
 
 .pods {
   position: relative;
-  padding: clamp(14px, 4cqi, 30px) clamp(14px, 5cqi, 34px) 30px calc(clamp(14px, 5cqi, 34px) + 16px);
+  padding: clamp(16px, 4cqi, 30px) clamp(12px, 4cqi, 26px) 30px calc(clamp(12px, 4cqi, 26px) + 18px);
   display: flex;
   flex-direction: column;
-  gap: clamp(14px, 5cqi, 34px);
+  gap: clamp(14px, 4.5cqi, 28px);
   min-height: 100%;
 }
+
+/* Each pod is its own card with a folder-style tab for its title. */
 .pod {
   --u: calc(3.1cqi + 1.05vh);
+  --card: #fffdf8;
+  --card-edge: rgba(45, 36, 22, 0.26);
   position: relative;
   font-size: var(--u);
   line-height: 1.35;
   overflow-wrap: anywhere;
+  /* one hard paper-edge shadow for tab and card together */
+  filter: drop-shadow(2px 3px 0 rgba(70, 58, 40, 0.17));
 }
 .pod.size-S { --u: calc(2.4cqi + 0.85vh); }
 .pod.size-L { --u: calc(4cqi + 1.3vh); }
 .pod.size-XL { --u: calc(5.4cqi + 1.7vh); }
 
-.pod-title {
-  display: inline-block;
+.pod.card-yellow { --card: #fff2ad; --card-edge: rgba(150, 118, 20, 0.38); }
+.pod.card-blue { --card: #e1ecf8; --card-edge: rgba(40, 80, 130, 0.3); }
+.pod.card-green { --card: #e1f0da; --card-edge: rgba(40, 100, 50, 0.3); }
+.pod.card-pink { --card: #fce2e9; --card-edge: rgba(150, 50, 80, 0.3); }
+
+.pod-tab {
   position: relative;
-  margin: 0 0 0.35em;
+  z-index: 1;
+  display: block;
+  width: max-content;
+  max-width: 88%;
+  margin: 0 0 -1px;
+  padding: 0.2em 0.75em 0.12em;
+  background: var(--card);
+  border: 1px solid var(--card-edge);
+  border-bottom: 0;
+  border-radius: 0.4em 0.4em 0 0;
   font-family: var(--font-hand);
   font-weight: 700;
-  font-size: 1.05em;
-  line-height: 1.1;
+  font-size: 0.86em;
+  line-height: 1.2;
   color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.pod-title .squiggle {
-  position: absolute;
-  left: -0.1em;
-  bottom: -0.28em;
-  width: calc(100% + 0.2em);
-  height: 0.3em;
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  opacity: 0.55;
-  vector-effect: non-scaling-stroke;
+.pod-card {
+  position: relative;
+  min-height: 1.7em;
+  padding: 0.6em 0.8em 0.7em;
+  background: var(--card);
+  border: 1px solid var(--card-edge);
+  border-radius: 0.4em;
+}
+.pod.has-tab .pod-card {
+  border-top-left-radius: 0;
 }
 
 .notes > :first-child { margin-top: 0; }
@@ -1374,17 +1404,19 @@ select {
   opacity: 0.45;
 }
 .is-editing .pod {
-  outline: 1.5px dashed transparent;
-  outline-offset: 8px;
   cursor: pointer;
 }
-.is-editing .pod:hover {
+.is-editing .pod .pod-card {
+  outline: 1.5px dashed transparent;
+  outline-offset: 4px;
+}
+.is-editing .pod:hover .pod-card {
   outline-color: var(--ink-3);
 }
 .pod-tools {
   position: absolute;
-  top: -12px;
-  right: -8px;
+  top: -10px;
+  right: -6px;
   z-index: 2;
   display: flex;
   align-items: center;
@@ -1498,8 +1530,8 @@ select {
 .projector .timer-controls {
   /* float over the title so showing them doesn't push the other pods around */
   position: absolute;
-  top: 0;
-  right: 0;
+  top: 8px;
+  right: 8px;
   margin: 0;
   opacity: 0;
   transition: opacity 0.15s;
@@ -1556,19 +1588,41 @@ select {
 }
 
 /* image */
+.pod-image {
+  transform: rotate(-0.7deg);
+}
+.pod-image .pod-card {
+  padding: 0.45em 0.45em 0.5em;
+}
+.pod-image .pod-card::after {
+  /* a strip of tape holding the picture on */
+  content: '';
+  position: absolute;
+  top: -0.45em;
+  left: 50%;
+  width: 3.4em;
+  height: 0.95em;
+  transform: translateX(-50%) rotate(-3deg);
+  background: rgba(232, 216, 160, 0.75);
+  border-left: 1px dashed rgba(150, 130, 70, 0.35);
+  border-right: 1px dashed rgba(150, 130, 70, 0.35);
+}
 .pod-figure {
   margin: 0;
 }
 .pod-figure img {
   display: block;
-  max-width: 100%;
+  width: 100%;
   max-height: 60vh;
-  border: 1px solid var(--line-2);
+  object-fit: contain;
   background: #fff;
 }
 .pod-figure figcaption {
-  margin-top: 0.3em;
-  font-size: 0.75em;
+  margin-top: 0.35em;
+  font-family: var(--font-hand);
+  font-size: 0.85em;
+  line-height: 1.2;
+  text-align: center;
   color: var(--ink-2);
 }
 .img-wait {
@@ -1586,4 +1640,104 @@ select {
   .tb-title b {
     max-width: 16vw;
   }
+}
+
+/* ------------------------------------------------------------------ tool options (tap a tool twice) */
+
+.tray-wrap {
+  position: relative;
+  display: flex;
+  height: 100%;
+}
+.tool-pop {
+  left: 50%;
+  transform: translateX(-50%);
+  width: 300px;
+}
+.tool-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tool-opts.hint-only {
+  font-size: 15px;
+  color: var(--ink-2);
+  line-height: 1.4;
+}
+.tool-preview {
+  display: block;
+  width: 100%;
+  height: 60px;
+  background:
+    linear-gradient(rgba(70, 120, 170, 0.14) 1px, transparent 1px) 0 0 / 12px 12px,
+    linear-gradient(90deg, rgba(70, 120, 170, 0.14) 1px, transparent 1px) 0 0 / 12px 12px,
+    #fffefa;
+  border: 1px solid var(--line);
+}
+.seg.full {
+  display: flex;
+}
+.seg.full button {
+  flex: 1;
+}
+.slider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.slider input {
+  flex: 1;
+  accent-color: var(--ink);
+  height: 28px;
+}
+.palette {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  justify-items: center;
+}
+.palette .sw {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  position: relative;
+  cursor: pointer;
+}
+.palette .sw.on {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 0 2px var(--sheet), 0 0 0 3.5px var(--ink);
+}
+.palette .sw-custom {
+  /* the "any colour" well: a colour wheel until you've picked one */
+  background: conic-gradient(#e0412b, #e8a317, #6aa339, #2f86c9, #6b3fa0, #d64f7e, #e0412b);
+  overflow: hidden;
+}
+.palette .sw-custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.photo-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1.5px dashed var(--ink-3);
+  color: var(--ink-2);
+  font-size: 15px;
+  cursor: pointer;
+}
+.photo-btn:hover {
+  border-color: var(--red);
+  color: var(--ink);
+}
+.photo-btn b {
+  color: var(--ink);
 }

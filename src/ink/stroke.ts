@@ -4,9 +4,9 @@ import type { Rect, Stroke } from '../lib/types'
 // Pen feel. These numbers were tuned by hand against an Apple Pencil:
 // a little pressure response, quick to follow the tip, smooth but not mushy.
 const PEN: StrokeOptions = {
-  thinning: 0.5,
+  thinning: 0.56,
   smoothing: 0.62,
-  streamline: 0.32,
+  streamline: 0.3,
   easing: (t) => t,
   start: { taper: 0, cap: true },
   end: { taper: 0, cap: true },
@@ -21,9 +21,23 @@ const HIGHLIGHTER: StrokeOptions = {
   end: { cap: true },
 }
 
-export function strokeOptions(s: Pick<Stroke, 'tool' | 'size' | 'sim' | 'shape'>, last: boolean): StrokeOptions {
+// Felt tip: an even line. Drawn a touch thinner than the nominal size so a
+// felt-tip and a fountain pen at the same setting look about as heavy.
+const FELT: StrokeOptions = {
+  thinning: 0,
+  smoothing: 0.6,
+  streamline: 0.36,
+  simulatePressure: false,
+  start: { taper: 0, cap: true },
+  end: { taper: 0, cap: true },
+}
+
+type Shape = Pick<Stroke, 'tool' | 'size' | 'sim' | 'shape' | 'style'>
+
+export function strokeOptions(s: Shape, last: boolean): StrokeOptions {
   if (s.tool === 'highlighter') return { ...HIGHLIGHTER, size: s.size, last }
-  if (s.shape) return { ...PEN, thinning: 0, smoothing: 0.3, streamline: 0, simulatePressure: false, size: s.size, last }
+  if (s.shape) return { ...PEN, thinning: 0, smoothing: 0.3, streamline: 0, simulatePressure: false, size: s.size * 0.85, last }
+  if (s.style === 'felt') return { ...FELT, size: s.size * 0.85, last }
   return { ...PEN, simulatePressure: !!s.sim, size: s.size, last }
 }
 
@@ -33,8 +47,8 @@ export function toTriples(pts: number[]): number[][] {
   return out
 }
 
-export function outline(s: Pick<Stroke, 'tool' | 'size' | 'sim' | 'shape' | 'pts'>, last = true): number[][] {
-  const pts = s.shape ? toTriples(s.pts).map((p) => [p[0], p[1], 0.5]) : toTriples(s.pts)
+export function outline(s: Shape & Pick<Stroke, 'pts'>, last = true): number[][] {
+  const pts = s.shape || s.style === 'felt' ? toTriples(s.pts).map((p) => [p[0], p[1], 0.5]) : toTriples(s.pts)
   return getStroke(pts, strokeOptions(s, last))
 }
 

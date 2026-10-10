@@ -9,7 +9,7 @@ function hexToRgb(hex: string): [number, number, number] {
 }
 
 /** Build a PDF of the lesson with the ink drawn on as real vector paths. */
-export async function exportPdf(session: Session) {
+export async function exportPdf(session: Session, getFile: (path: string) => Promise<Blob>) {
   const { PDFDocument, rgb, BlendMode } = await import('pdf-lib')
   const lesson = session.lesson
   const out = await PDFDocument.create()
@@ -24,6 +24,11 @@ export async function exportPdf(session: Session) {
     if (p.kind === 'pdf' && src) {
       ;[page] = await out.copyPages(src, [p.n - 1])
       out.addPage(page)
+    } else if (p.kind === 'image') {
+      page = out.addPage([p.w, p.h])
+      const bytes = new Uint8Array(await (await getFile(p.path)).arrayBuffer())
+      const img = bytes[0] === 0x89 ? await out.embedPng(bytes) : await out.embedJpg(bytes)
+      page.drawImage(img, { x: 0, y: 0, width: p.w, height: p.h })
     } else {
       page = out.addPage([p.w, p.h])
       if (p.kind === 'paper' && p.paper !== 'plain') {

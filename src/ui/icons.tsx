@@ -90,6 +90,9 @@ export const IconProjector = (p: P) => (
 export const IconTablet = (p: P) => (
   <svg {...base(p)}><rect x="5" y="3.5" width="14" height="17" rx="2" /><path d="M11 17.5h2" /></svg>
 )
+export const IconCamera = (p: P) => (
+  <svg {...base(p)}><path d="M4 8.5c0-1 .8-1.8 1.8-1.8h2.1l1.3-2h5.6l1.3 2h2.1c1 0 1.8.8 1.8 1.8v9c0 1-.8 1.8-1.8 1.8H5.8c-1 0-1.8-.8-1.8-1.8z" /><circle cx="12" cy="13" r="3.4" /></svg>
+)
 export const IconShapes = (p: P) => (
   <svg {...base(p)}><circle cx="8" cy="8" r="3.5" /><rect x="12.5" y="12.5" width="7" height="7" /><path d="M4 20l3.5-6 3.5 6z" /></svg>
 )

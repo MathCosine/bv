@@ -6,7 +6,7 @@ export interface Patch {
   add: Stroke[]
 }
 
-type Listener = (page: string, origin: 'local' | 'remote' | 'load') => void
+type Listener = (page: string, origin: 'local' | 'remote' | 'load', patch?: Patch) => void
 
 /**
  * Holds every page's strokes. Patches are idempotent (adding a stroke that's
@@ -45,25 +45,29 @@ export class InkStore {
     return () => this.listeners.delete(fn)
   }
 
-  private emit(page: string, origin: 'local' | 'remote' | 'load') {
-    for (const l of this.listeners) l(page, origin)
+  private emit(page: string, origin: 'local' | 'remote' | 'load', patch?: Patch) {
+    for (const l of this.listeners) l(page, origin, patch)
   }
 
-  private applyRaw(p: Patch): boolean {
+  /** Apply a patch; returns what actually changed, or null if nothing did. */
+  private applyRaw(p: Patch): Patch | null {
     const cur = this.pages.get(p.page) ?? []
     let next = cur
+    let removed: string[] = []
     if (p.remove.length) {
       const rm = new Set(p.remove)
       next = next.filter((s) => !rm.has(s.id))
+      if (next.length !== cur.length) removed = p.remove.filter((id) => cur.some((s) => s.id === id))
     }
+    let fresh: Stroke[] = []
     if (p.add.length) {
       const have = new Set(next.map((s) => s.id))
-      const fresh = p.add.filter((s) => !have.has(s.id))
+      fresh = p.add.filter((s) => !have.has(s.id))
       if (fresh.length) next = next === cur ? next.concat(fresh) : (next.push(...fresh), next)
     }
-    if (next === cur) return false
+    if (next === cur) return null
     this.pages.set(p.page, next)
-    return true
+    return { page: p.page, remove: removed, add: fresh }
   }
 
   /** A change made on this device. Recorded for undo unless `history` is false. */
@@ -71,19 +75,21 @@ export class InkStore {
     if (!p.remove.length && !p.add.length) return
     const removed = this.get(p.page).filter((s) => p.remove.includes(s.id))
     const real: Patch = { page: p.page, remove: removed.map((s) => s.id), add: p.add }
-    if (!this.applyRaw(real)) return
+    const done = this.applyRaw(real)
+    if (!done) return
     if (history) {
       this.undoStack.push({ page: p.page, remove: p.add.map((s) => s.id), add: removed })
       if (this.undoStack.length > 300) this.undoStack.shift()
       this.redoStack = []
     }
-    this.emit(p.page, 'local')
+    this.emit(p.page, 'local', done)
     this.onLocalPatch?.(real)
   }
 
   /** A change that came from the other device. */
   applyRemote(p: Patch) {
-    if (this.applyRaw(p)) this.emit(p.page, 'remote')
+    const done = this.applyRaw(p)
+    if (done) this.emit(p.page, 'remote', done)
   }
 
   /** Record a hand-built undo step (for gestures made of many small commits, like erasing). */

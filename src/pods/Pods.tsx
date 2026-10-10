@@ -56,9 +56,10 @@ const ACCENTS: Record<Pod['accent'], string> = {
 function PodFrame({ pod, ctx, first, last }: { pod: Pod; ctx: PodContext; first: boolean; last: boolean }) {
   const style = { '--accent': ACCENTS[pod.accent] } as CSSProperties
   const open = () => ctx.editing && ctx.onOpen?.(pod.id)
+  const titled = pod.showTitle && !!pod.title
   return (
     <section
-      className={`pod pod-${pod.type} size-${pod.size}${pod.hidden ? ' is-hidden' : ''}`}
+      className={`pod pod-${pod.type} size-${pod.size} card-${pod.card ?? 'paper'}${titled ? ' has-tab' : ''}${pod.hidden ? ' is-hidden' : ''}`}
       style={style}
       onClick={ctx.editing ? open : undefined}
     >
@@ -71,18 +72,13 @@ function PodFrame({ pod, ctx, first, last }: { pod: Pod; ctx: PodContext; first:
           <button title="Remove" onClick={() => ctx.onDelete?.(pod.id)}><IconClose width={16} height={16} /></button>
         </div>
       )}
-      {pod.showTitle && pod.title && (
-        <h2 className="pod-title">
-          <span>{pod.title}</span>
-          <svg className="squiggle" viewBox="0 0 120 8" preserveAspectRatio="none" aria-hidden>
-            <path d="M2 5.5C18 2.5 30 6.5 46 4.2S78 2 92 4.6 112 5.5 118 3.6" />
-          </svg>
-        </h2>
-      )}
-      {pod.type === 'notes' && <NotesBody pod={pod} ctx={ctx} />}
-      {pod.type === 'timer' && <TimerBody pod={pod} ctx={ctx} />}
-      {pod.type === 'checklist' && <ChecklistBody pod={pod} ctx={ctx} />}
-      {pod.type === 'image' && <ImageBody pod={pod} ctx={ctx} />}
+      {titled && <h2 className="pod-tab">{pod.title}</h2>}
+      <div className="pod-card">
+        {pod.type === 'notes' && <NotesBody pod={pod} ctx={ctx} />}
+        {pod.type === 'timer' && <TimerBody pod={pod} ctx={ctx} />}
+        {pod.type === 'checklist' && <ChecklistBody pod={pod} ctx={ctx} />}
+        {pod.type === 'image' && <ImageBody pod={pod} ctx={ctx} />}
+      </div>
     </section>
   )
 }

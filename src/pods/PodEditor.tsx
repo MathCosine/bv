@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { uid } from '../lib/ids'
-import type { Accent, ChecklistPod, ImagePod, NotesPod, Pod, PodSize, TimerPod } from '../lib/types'
+import type { Accent, CardColor, ChecklistPod, ImagePod, NotesPod, Pod, PodSize, TimerPod } from '../lib/types'
 import { IconClose, IconLeft, IconRight, IconTrash, IconUpload } from '../ui/icons'
 import { MATH_SNIPPETS, renderInline } from './markdown'
 import { POD_TYPE_LABEL } from './defaults'
@@ -18,6 +18,13 @@ interface Props {
 }
 
 const SIZES: PodSize[] = ['S', 'M', 'L', 'XL']
+const CARDS: { id: CardColor; label: string }[] = [
+  { id: 'paper', label: 'Plain paper' },
+  { id: 'yellow', label: 'Yellow sticky note' },
+  { id: 'blue', label: 'Blue card' },
+  { id: 'green', label: 'Green card' },
+  { id: 'pink', label: 'Pink card' },
+]
 const ACCENTS: { id: Accent; label: string }[] = [
   { id: 'graphite', label: 'Graphite' },
   { id: 'red', label: 'Red pencil' },
@@ -61,7 +68,20 @@ export function PodEditor(props: Props) {
         </div>
       </div>
       <div className="field">
-        <span>Colour</span>
+        <span>Card</span>
+        <div className="seg swatches">
+          {CARDS.map((c) => (
+            <button
+              key={c.id}
+              title={c.label}
+              className={`card-sw card-sw-${c.id}${(pod.card ?? 'paper') === c.id ? ' on' : ''}`}
+              onClick={() => onChange({ ...pod, card: c.id })}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="field">
+        <span>Title colour</span>
         <div className="seg swatches">
           {ACCENTS.map((a) => (
             <button
@@ -126,11 +146,11 @@ function NotesEditor({ pod, pageId, pageNumber, pageCount, onChange, onPage }: P
         <span>When the page changes</span>
         <div className="radio-stack">
           <label>
-            <input type="radio" checked={pod.scope === 'lesson'} onChange={() => onChange({ ...pod, scope: 'lesson' })} />
+            <input type="radio" checked={pod.scope === 'lesson'} onChange={() => onChange({ ...pod, scope: 'lesson', hideWhenEmpty: false })} />
             <b>Keep</b> &mdash; same notes all lesson
           </label>
           <label>
-            <input type="radio" checked={pod.scope === 'page'} onChange={() => onChange({ ...pod, scope: 'page' })} />
+            <input type="radio" checked={pod.scope === 'page'} onChange={() => onChange({ ...pod, scope: 'page', hideWhenEmpty: true })} />
             <b>Wipe</b> &mdash; each page gets its own notes
           </label>
         </div>

@@ -19,19 +19,23 @@ the live ink between the two devices.
 ## What's in it
 
 **On the iPad**
-- Pressure-sensitive pen, highlighter (it goes *under* the printed text, like a real one), two erasers (whole stroke, or just what you rub), lasso to move / resize / recolour / copy / delete, and a laser pointer that fades.
-- **Draw and hold** to straighten: a wobbly line becomes straight (it snaps level when it's nearly level), and circles, rectangles and triangles become clean shapes. Handy for number lines and geometry.
-- Palm rejection: only the Pencil draws, fingers scroll and zoom. (There's a "draw with my finger" switch if you need it.)
-- Pinch to zoom in and write small; the projector zooms in with you, or turn that off.
-- Two-finger tap = undo, three-finger tap = redo. Double-tap with a finger to zoom in or back out.
-- Add blank pages anywhere (plain, graph, lined, dots) for working problems out.
-- Pods panel can be shown or hidden on the iPad. You edit pods on the laptop.
+- Two pens: **fountain** (gets thicker the harder you press) and **felt tip** (an even line). Tap the pen again for its options, Notability-style: a size slider with a live preview, 18 colours, and a colour picker for anything else.
+- A highlighter that goes *under* the printed text, like a real one, and straightens itself when you underline a line of text.
+- Two erasers (whole stroke, or just what you rub), plus a "highlighter only" switch.
+- Lasso: circle writing or just tap a stroke to pick it up. Drag it with the Pencil or a finger, pull the corner to resize, use the top handle to turn it, or recolour, copy or delete it.
+- **Draw and hold** to clean up a shape: a wobbly line goes straight (and snaps level when it's nearly level), and circles, rectangles and triangles turn into clean shapes. Keep holding and move the Pencil to resize the shape or swing the line around. Handy for number lines and geometry.
+- A laser pointer that fades.
+- Palm rejection: only the Pencil draws, and fingers scroll and zoom. (There's a "draw with my finger" switch if you need it.)
+- Pinch to zoom in and write small. The projector zooms in with you, or you can turn that off.
+- Two-finger tap undoes, three-finger tap redoes. Double-tap with a finger to zoom in or back out.
+- Add pages anywhere: blank (plain, graph, lined, dots) for working problems out, or a **photo**. Take a picture of a student's work and it's up on the projector, ready to write on, like a document camera.
+- The pods panel can be shown or hidden on the iPad. You edit pods on the laptop.
 - "Cover the projector" puts up an *Eyes up here!* screen.
 - Save the lesson as a PDF with your ink on it (to send to the class teacher, say).
 
 **On the projector (laptop)**
-- Pods, each with its own settings: **Notes** (Markdown + LaTeX math), **Timer**, **Checklist**, **Picture**.
-- Notes pods can **keep** their text all lesson, or **wipe** with each page (each page gets its own notes, and they come back when you go back to that page).
+- Pods, each on its own card with a title tab: **Notes** (Markdown + LaTeX math), **Timer**, **Checklist**, **Picture**. Pick a card colour per pod (plain, yellow sticky note, blue, green, pink).
+- Notes pods can **keep** their text all lesson, or **wipe** with each page (each page gets its own notes, and they come back when you go back to that page). A wiping card hides itself on pages that have no notes.
 - Drag the edge to make the pods column wider or narrower; text size per pod.
 - Keyboard: <kbd>←</kbd> <kbd>→</kbd> pages, <kbd>E</kbd> edit pods, <kbd>P</kbd> hide pods, <kbd>B</kbd> cover, <kbd>F</kbd> full screen.
 

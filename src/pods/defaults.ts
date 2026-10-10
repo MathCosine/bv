@@ -12,13 +12,14 @@ export function newPod(type: PodType, layout: Layout): Pod {
         scope: layout === 'slides' ? 'page' : 'lesson',
         text: '',
         perPage: {},
-        hideWhenEmpty: false,
+        // a "wipe with each page" card hides itself on pages with nothing to say
+        hideWhenEmpty: layout === 'slides',
         align: 'left',
       } satisfies NotesPod
     case 'timer':
       return { ...common, type, title: 'Timer', duration: 3 * 60_000, state: { status: 'idle' }, chime: true, accent: 'red' } satisfies TimerPod
     case 'checklist':
-      return { ...common, type, title: 'Today’s plan', items: [], accent: 'blue' } satisfies ChecklistPod
+      return { ...common, type, title: 'Today’s plan', items: [], accent: 'blue', card: 'blue' } satisfies ChecklistPod
     case 'image':
       return { ...common, type, title: 'Picture', path: null, caption: '', showTitle: false } satisfies ImagePod
   }
@@ -28,9 +29,11 @@ export function starterPods(layout: Layout): Pod[] {
   const today = newPod('notes', layout) as NotesPod
   today.title = 'We’re learning'
   today.scope = 'lesson'
+  today.hideWhenEmpty = false
   today.accent = 'red'
   const key = newPod('notes', layout) as NotesPod
   key.title = layout === 'slides' ? 'On this slide' : 'Notes'
+  key.card = 'yellow'
   const timer = newPod('timer', layout)
   return [today, key, timer]
 }

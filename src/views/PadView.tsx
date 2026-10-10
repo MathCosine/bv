@@ -8,17 +8,19 @@ import {
 import type { Backend } from '../lib/backend'
 import { pref, setPref } from '../lib/config'
 import type { Hub } from '../lib/hub'
-import { blankPage, fileUrl } from '../lib/lessons'
+import { blankPage, fileUrl, loadImage, preparePhoto } from '../lib/lessons'
+import { uid } from '../lib/ids'
 import type { Session } from '../lib/session'
 import type { PageRef, Paper, Rect } from '../lib/types'
 import { PodColumn, type PodContext } from '../pods/Pods'
 import {
-  IconBack, IconCopy, IconLeft, IconMore, IconPages, IconPlus, IconRedo, IconRight, IconSidebar, IconTrash,
+  IconBack, IconCamera, IconCopy, IconLeft, IconMore, IconPages, IconPlus, IconRedo, IconRight, IconSidebar, IconTrash,
   IconUndo, ToolEraser, ToolHighlighter, ToolLaser, ToolLasso, ToolPen,
 } from '../ui/icons'
 import { useOutside, useSubscribe, useToast } from '../ui/hooks'
 import { PageGrid } from './PageGrid'
 import { exportPdf } from './exportPdf'
+import { ToolOptions } from './ToolOptions'
 
 interface Props {
   session: Session
@@ -43,7 +45,7 @@ export function PadView({ session, hub, backend, onExit }: Props) {
   const [followZoom, setFollowZoom] = useState(() => pref('followZoom', true))
   const [view, setView] = useState<ViewInfo | null>(null)
   const [sel, setSel] = useState<Rect | null>(null)
-  const [pop, setPop] = useState<null | 'more' | 'add' | 'colors'>(null)
+  const [pop, setPop] = useState<null | 'more' | 'add' | 'opts'>(null)
   const [grid, setGrid] = useState(false)
   const [compact, setCompact] = useState(() => window.innerWidth < 1060)
   const [toast, setToast] = useToast()
@@ -72,12 +74,13 @@ export function PadView({ session, hub, backend, onExit }: Props) {
     })
     boardRef.current = b
     b.setPdf(session.pdf)
+    b.setImageLoader((path) => fileUrl(backend, path).then(loadImage))
     b.setDocument(session.lesson.pages, session.lesson.layout, pref(`page.${id}`, 0))
     return () => {
       b.destroy()
       boardRef.current = null
     }
-  }, [session, hub])
+  }, [session, hub, backend])
 
   useEffect(() => {
     boardRef.current?.setDocument(lesson.pages, lesson.layout)
@@ -143,9 +146,10 @@ export function PadView({ session, hub, backend, onExit }: Props) {
   undoRef.current = undo
   redoRef.current = redo
 
+  // Tap a tool to pick it; tap it again for its options (like Notability).
   const pickTool = (tool: ToolName) => {
-    if (tool === tools.tool && (tool === 'pen' || tool === 'highlighter')) {
-      setPop((p) => (p === 'colors' ? null : 'colors'))
+    if (tool === tools.tool) {
+      setPop((p) => (p === 'opts' ? null : 'opts'))
       return
     }
     setTools((t) => ({ ...t, tool }))
@@ -161,9 +165,28 @@ export function PadView({ session, hub, backend, onExit }: Props) {
     requestAnimationFrame(() => boardRef.current?.goTo(index + 1))
   }
 
+  const addPhoto = async (file: File | undefined) => {
+    if (!file) return
+    setPop(null)
+    setToast('Adding the photo\u2026')
+    try {
+      const { blob, w, h } = await preparePhoto(file)
+      const path = `${lesson.id}/photo-${uid(6)}.jpg`
+      await backend.putFile(path, blob)
+      const at = boardRef.current?.getIndex() ?? index
+      const page: PageRef = { id: uid(8), kind: 'image', path, w, h }
+      const pages = session.lesson.pages
+      session.setPages([...pages.slice(0, at + 1), page, ...pages.slice(at + 1)])
+      setToast('')
+      requestAnimationFrame(() => boardRef.current?.goTo(at + 1))
+    } catch (e) {
+      setToast(`Couldn\u2019t add the photo: ${(e as Error).message}`)
+    }
+  }
+
   const deletePage = (p: PageRef) => {
-    if (p.kind !== 'paper' || lesson.pages.length < 2) return
-    if (session.ink.get(p.id).length && !confirm('Delete this page and everything written on it?')) return
+    if (p.kind === 'pdf' || lesson.pages.length < 2) return
+    if ((p.kind === 'image' || session.ink.get(p.id).length) && !confirm('Delete this page and everything on it?')) return
     const ids = session.ink.get(p.id).map((s) => s.id)
     if (ids.length) session.ink.commit({ page: p.id, remove: ids, add: [] }, false)
     session.setPages(lesson.pages.filter((x) => x.id !== p.id))
@@ -187,7 +210,7 @@ export function PadView({ session, hub, backend, onExit }: Props) {
     setPop(null)
     setToast('Making the PDF…')
     try {
-      await exportPdf(session)
+      await exportPdf(session, (path) => backend.getFile(path))
       setToast('Saved a PDF with your ink')
     } catch (e) {
       setToast(`Couldn’t export: ${(e as Error).message}`)
@@ -230,11 +253,11 @@ export function PadView({ session, hub, backend, onExit }: Props) {
 
   const moreRef = useRef<HTMLDivElement>(null)
   const addRef = useRef<HTMLDivElement>(null)
-  const colorRef = useRef<HTMLDivElement>(null)
+  const trayRef = useRef<HTMLDivElement>(null)
   const closePop = useCallback(() => setPop(null), [])
-  useOutside(moreRef, pop === 'more', closePop)
-  useOutside(addRef, pop === 'add', closePop)
-  useOutside(colorRef, pop === 'colors', closePop)
+  useOutside(moreRef, pop === 'more', closePop, true)
+  useOutside(addRef, pop === 'add', closePop, true)
+  useOutside(trayRef, pop === 'opts', closePop, true)
 
   const canUndo = session.ink.canUndo(slides ? pageId : undefined)
   const canRedo = session.ink.canRedo(slides ? pageId : undefined)
@@ -251,18 +274,24 @@ export function PadView({ session, hub, backend, onExit }: Props) {
           : 'projector not connected'
 
   const t = tools
+  const quickRow = (colors: { name: string; value: string }[], value: string, set: (c: string) => void) => (
+    <div className="swatch-row">
+      {colors.map((c) => (
+        <button key={c.value} title={c.name} className={`sw${value === c.value ? ' on' : ''}`} style={{ background: c.value }} onClick={() => set(c.value)} />
+      ))}
+      {!colors.some((c) => c.value === value) && (
+        <button title="Your colour" className="sw on" style={{ background: value }} onClick={() => setPop('opts')} />
+      )}
+    </div>
+  )
   const colorPicker = (
     <>
       {t.tool === 'pen' && (
         <>
-          <div className="swatch-row">
-            {PEN_COLORS.map((c) => (
-              <button key={c.value} title={c.name} className={`sw${t.penColor === c.value ? ' on' : ''}`} style={{ background: c.value }} onClick={() => setTools({ ...t, penColor: c.value })} />
-            ))}
-          </div>
+          {quickRow(PEN_COLORS, t.penColor, (c) => setTools({ ...t, penColor: c }))}
           <div className="size-row">
-            {PEN_SIZES.map((s, i) => (
-              <button key={s} className={t.penSize === s ? 'on' : ''} onClick={() => setTools({ ...t, penSize: s })} aria-label={`Pen size ${i + 1}`}>
+            {PEN_SIZES.map((sz, i) => (
+              <button key={sz} className={Math.abs(t.penSize - sz) < 0.05 ? 'on' : ''} onClick={() => setTools({ ...t, penSize: sz })} aria-label={`Pen size ${i + 1}`}>
                 <i style={{ width: 4 + i * 4, height: 4 + i * 4, background: t.penColor }} />
               </button>
             ))}
@@ -271,14 +300,10 @@ export function PadView({ session, hub, backend, onExit }: Props) {
       )}
       {t.tool === 'highlighter' && (
         <>
-          <div className="swatch-row">
-            {HIGHLIGHT_COLORS.map((c) => (
-              <button key={c.value} title={c.name} className={`sw${t.hlColor === c.value ? ' on' : ''}`} style={{ background: c.value }} onClick={() => setTools({ ...t, hlColor: c.value })} />
-            ))}
-          </div>
+          {quickRow(HIGHLIGHT_COLORS, t.hlColor, (c) => setTools({ ...t, hlColor: c }))}
           <div className="size-row">
-            {HIGHLIGHT_SIZES.map((s, i) => (
-              <button key={s} className={t.hlSize === s ? 'on' : ''} onClick={() => setTools({ ...t, hlSize: s })} aria-label={`Highlighter size ${i + 1}`}>
+            {HIGHLIGHT_SIZES.map((sz, i) => (
+              <button key={sz} className={Math.abs(t.hlSize - sz) < 0.5 ? 'on' : ''} onClick={() => setTools({ ...t, hlSize: sz })} aria-label={`Highlighter size ${i + 1}`}>
                 <i style={{ width: 6 + i * 4, height: 10 + i * 4, borderRadius: 2, background: t.hlColor }} />
               </button>
             ))}
@@ -305,6 +330,7 @@ export function PadView({ session, hub, backend, onExit }: Props) {
         </div>
 
         <div className="tb-group">
+          <div className="tray-wrap" ref={trayRef}>
           <div className="tray">
             <button className={t.tool === 'pen' ? 'on' : ''} onClick={() => pickTool('pen')} aria-label="Pen (P)">
               <ToolPen color={t.penColor} />
@@ -322,22 +348,17 @@ export function PadView({ session, hub, backend, onExit }: Props) {
               <ToolLaser />
             </button>
           </div>
+          {pop === 'opts' && (
+            <div className="pop tool-pop">
+              <ToolOptions tools={t} onChange={setTools} />
+            </div>
+          )}
+          </div>
           {(t.tool === 'pen' || t.tool === 'highlighter') &&
             (compact ? (
-              <div style={{ position: 'relative' }} ref={colorRef}>
-                <button
-                  className="icon-btn"
-                  onClick={() => setPop((p) => (p === 'colors' ? null : 'colors'))}
-                  aria-label="Colour and size"
-                >
-                  <span className="sw" style={{ display: 'block', width: 24, height: 24, borderRadius: '50%', background: t.tool === 'pen' ? t.penColor : t.hlColor, boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.2)' }} />
-                </button>
-                {pop === 'colors' && (
-                  <div className="pop" style={{ left: -60, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {colorPicker}
-                  </div>
-                )}
-              </div>
+              <button className="icon-btn" onClick={() => setPop((p) => (p === 'opts' ? null : 'opts'))} aria-label="Colour and size">
+                <span className="sw" style={{ display: 'block', width: 24, height: 24, borderRadius: '50%', background: t.tool === 'pen' ? t.penColor : t.hlColor, boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.2)' }} />
+              </button>
             ) : (
               <>
                 <span className="tb-sep" />
@@ -388,7 +409,7 @@ export function PadView({ session, hub, backend, onExit }: Props) {
             )}
           </div>
           <div style={{ position: 'relative' }} ref={addRef}>
-            <button className="icon-btn" onClick={() => setPop((p) => (p === 'add' ? null : 'add'))} aria-label="Add a blank page">
+            <button className="icon-btn" onClick={() => setPop((p) => (p === 'add' ? null : 'add'))} aria-label="Add a page">
               <IconPlus />
             </button>
             {pop === 'add' && (
@@ -402,6 +423,13 @@ export function PadView({ session, hub, backend, onExit }: Props) {
                     </button>
                   ))}
                 </div>
+                <label className="photo-btn">
+                  <IconCamera width={20} height={20} />
+                  <span>
+                    <b>Photo</b> &middot; take one, or pick from your photos
+                  </span>
+                  <input type="file" accept="image/*" hidden onChange={(e) => { void addPhoto(e.target.files?.[0]); e.target.value = '' }} />
+                </label>
               </div>
             )}
           </div>
@@ -433,6 +461,10 @@ export function PadView({ session, hub, backend, onExit }: Props) {
                   Projector zooms in when I do
                 </label>
                 <label>
+                  <input type="checkbox" checked={tools.snap} onChange={() => setTools({ ...tools, snap: !tools.snap })} />
+                  Hold to straighten lines &amp; shapes
+                </label>
+                <label>
                   <input
                     type="checkbox"
                     checked={fingerDraw}
@@ -462,7 +494,10 @@ export function PadView({ session, hub, backend, onExit }: Props) {
       <div className="pad-main">
         <div className="board-host" ref={hostRef}>
           {sel && tools.tool === 'lasso' && (
-            <div className="sel-bar" style={{ left: sel.x + sel.w / 2, top: Math.max(56, sel.y - 16) }}>
+            <div
+              className={`sel-bar${sel.y < 110 ? ' below' : ''}`}
+              style={{ left: sel.x + sel.w / 2, top: sel.y < 110 ? sel.y + sel.h + 22 : sel.y - 52 }}
+            >
               {PEN_COLORS.slice(0, 5).map((c) => (
                 <button key={c.value} className="sw" style={{ background: c.value }} onClick={() => boardRef.current?.recolorSelection(c.value)} aria-label={c.name} />
               ))}
@@ -486,6 +521,7 @@ export function PadView({ session, hub, backend, onExit }: Props) {
       {grid && (
         <PageGrid
           session={session}
+          image={(path) => fileUrl(backend, path).then(loadImage)}
           current={index}
           onPick={(i) => {
             setGrid(false)

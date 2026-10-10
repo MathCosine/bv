@@ -91,6 +91,9 @@ export async function duplicateLesson(backend: Backend, src: Lesson, withInk: bo
   }
   const docPath = src.doc ? await move(src.doc.path) : null
   const thumb = await move(src.thumb).catch(() => null)
+  const pages = await Promise.all(
+    src.pages.map(async (p) => (p.kind === 'image' ? { ...p, path: (await move(p.path)) ?? p.path } : p)),
+  )
   const pods = await Promise.all(
     src.pods.map(async (p) => (p.type === 'image' && p.path ? { ...p, path: await move(p.path).catch(() => null) } : p)),
   )
@@ -99,6 +102,7 @@ export async function duplicateLesson(backend: Backend, src: Lesson, withInk: bo
     id,
     title: `${src.title} (${withInk ? 'copy' : 'fresh'})`,
     doc: src.doc && docPath ? { ...src.doc, path: docPath } : null,
+    pages,
     thumb,
     pods: pods.map((p) => (p.type === 'timer' ? { ...p, state: { status: 'idle' } } : p.type === 'checklist' ? { ...p, items: p.items.map((i) => ({ ...i, done: false })) } : p)),
     createdAt: now,
@@ -120,4 +124,37 @@ export function fileUrl(backend: Backend, path: string): Promise<string> {
     urls.set(path, p)
   }
   return p
+}
+
+export function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((res, rej) => {
+    const img = new Image()
+    img.onload = () => res(img)
+    img.onerror = () => rej(new Error('Could not load the picture'))
+    img.src = url
+  })
+}
+
+/** Shrink a photo to a sensible size and turn it into a JPEG for upload. */
+export async function preparePhoto(file: File, maxSide = 2400): Promise<{ blob: Blob; w: number; h: number }> {
+  const url = URL.createObjectURL(file)
+  try {
+    const img = await loadImage(url)
+    const k = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight))
+    const w = Math.max(1, Math.round(img.naturalWidth * k))
+    const h = Math.max(1, Math.round(img.naturalHeight * k))
+    const c = document.createElement('canvas')
+    c.width = w
+    c.height = h
+    const ctx = c.getContext('2d')!
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, w, h)
+    ctx.drawImage(img, 0, 0, w, h)
+    const blob = await canvasToBlob(c, 'image/jpeg', 0.86)
+    c.width = 0
+    c.height = 0
+    return { blob, w, h }
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }

@@ -10,6 +10,8 @@ export const PAGE_W = 1000
 export type PageRef =
   | { id: string; kind: 'pdf'; n: number; w: number; h: number }
   | { id: string; kind: 'paper'; paper: Paper; w: number; h: number }
+  /** a photo or picture added from the iPad (camera, photo library, files) */
+  | { id: string; kind: 'image'; path: string; w: number; h: number }
 
 export interface DocInfo {
   path: string
@@ -19,6 +21,8 @@ export interface DocInfo {
 
 export type Accent = 'graphite' | 'red' | 'blue' | 'green'
 export type PodSize = 'S' | 'M' | 'L' | 'XL'
+/** the colour of the card a pod sits on */
+export type CardColor = 'paper' | 'yellow' | 'blue' | 'green' | 'pink'
 
 interface PodBase {
   id: string
@@ -26,6 +30,7 @@ interface PodBase {
   showTitle: boolean
   size: PodSize
   accent: Accent
+  card?: CardColor
   hidden: boolean
 }
 
@@ -95,6 +100,8 @@ export type LessonMeta = Pick<Lesson, 'id' | 'title' | 'layout' | 'thumb' | 'upd
 }
 
 export type InkTool = 'pen' | 'highlighter'
+/** fountain: thickens with pressure. felt: an even line, like a felt-tip marker. */
+export type PenStyle = 'fountain' | 'felt'
 
 export interface Stroke {
   id: string
@@ -107,6 +114,8 @@ export interface Stroke {
   sim?: boolean
   /** snapped shape: drawn with even width */
   shape?: boolean
+  /** pen style; missing means fountain */
+  style?: PenStyle
 }
 
 export interface Rect {

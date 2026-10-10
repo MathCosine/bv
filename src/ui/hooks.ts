@@ -1,11 +1,20 @@
 import { useEffect, useReducer, useState, type RefObject } from 'react'
 
-/** Close something when a pointer goes down outside it. */
-export function useOutside(ref: RefObject<HTMLElement | null>, open: boolean, onClose: () => void) {
+/**
+ * Close something when a pointer goes down outside it. With `swallow`, that
+ * tap only closes it (so tapping the page to dismiss a menu doesn't draw a dot).
+ */
+export function useOutside(ref: RefObject<HTMLElement | null>, open: boolean, onClose: () => void, swallow = false) {
   useEffect(() => {
     if (!open) return
     const h = (e: PointerEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        onClose()
+        if (swallow && (e.target as HTMLElement).closest?.('.board')) {
+          e.stopPropagation()
+          e.preventDefault()
+        }
+      }
     }
     // next tick, so the click that opened it doesn't close it
     const t = window.setTimeout(() => document.addEventListener('pointerdown', h, true))
@@ -13,7 +22,7 @@ export function useOutside(ref: RefObject<HTMLElement | null>, open: boolean, on
       clearTimeout(t)
       document.removeEventListener('pointerdown', h, true)
     }
-  }, [ref, open, onClose])
+  }, [ref, open, onClose, swallow])
 }
 
 /** Re-render whenever a subscribe-style source says something changed. */

@@ -1,13 +1,13 @@
 import type { InkStore, Patch } from '../ink/store'
 import {
-  eraseFrom, lassoContains, outline, outlineToPath, round1, strokeHit, strokePath,
+  eraseFrom, lassoContains, outline, outlineToPath, pointInPolygon, round1, strokeHit, strokePath,
   transformStroke, unionBounds,
 } from '../ink/stroke'
-import { recognize, shapePoints, snapLineEnd, type Shape } from '../ink/shapes'
+import { recognize, scaleShape, shapeCenter, shapePoints, snapLineEnd, straighten, type Shape } from '../ink/shapes'
 import { DEFAULT_TOOLS, type ToolState } from '../ink/tools'
 import type { PdfPainter } from '../lib/pdf'
 import { uid } from '../lib/ids'
-import { PAGE_W, type Layout, type PageRef, type Rect, type Stroke } from '../lib/types'
+import { PAGE_W, type Layout, type PageRef, type PenStyle, type Rect, type Stroke } from '../lib/types'
 import { drawPaper } from './paper'
 
 export interface PageBox {
@@ -29,7 +29,7 @@ export interface ViewInfo {
 }
 
 export type LiveEvent =
-  | { k: 'begin'; id: string; page: string; tool: Stroke['tool']; color: string; size: number; sim: boolean; pts: number[] }
+  | { k: 'begin'; id: string; page: string; tool: Stroke['tool']; color: string; size: number; sim: boolean; style?: PenStyle; pts: number[] }
   | { k: 'pts'; id: string; pts: number[] }
   | { k: 'replace'; id: string; pts: number[]; shape: boolean }
   | { k: 'end'; id: string }
@@ -63,6 +63,7 @@ interface RemoteLive {
   color: string
   size: number
   sim: boolean
+  style?: PenStyle
   shape: boolean
   pts: number[]
   shown: number
@@ -77,10 +78,23 @@ interface Selection {
 }
 
 type Action =
-  | { kind: 'draw'; pointerId: number; stroke: Stroke; box: PageBox; predicted: number[]; anchor: [number, number]; holdTimer: number; snapped: Shape | null; lastEmit: number }
+  | {
+      kind: 'draw'
+      pointerId: number
+      stroke: Stroke
+      box: PageBox
+      predicted: number[]
+      anchor: [number, number]
+      holdTimer: number
+      snapped: Shape | null
+      /** shape as first recognised, and where the pencil was, for resizing it after */
+      snapBase: { shape: Shape; at: [number, number] } | null
+      /** smoothed pencil pressure */
+      ema: number
+    }
   | { kind: 'erase'; pointerId: number; last: [number, number] | null; perPage: Map<string, { originals: Map<string, Stroke>; created: Set<string> }> }
-  | { kind: 'lasso'; pointerId: number; box: PageBox; poly: number[] }
-  | { kind: 'move'; pointerId: number; start: [number, number]; scale: boolean; m0: number[] }
+  | { kind: 'lasso'; pointerId: number; box: PageBox; poly: number[]; travel: number }
+  | { kind: 'move'; pointerId: number; start: [number, number]; mode: 'move' | 'scale' | 'rotate'; m0: number[] }
   | { kind: 'laser'; pointerId: number }
   | { kind: 'none'; pointerId: number }
 
@@ -93,6 +107,7 @@ interface Touch {
 }
 
 const IDENTITY = [1, 0, 0, 1, 0, 0]
+const HOLD_MS = 520
 const GAP = 36 // units between pages in scroll layout
 const LASER_LIFE = 650
 
@@ -149,6 +164,10 @@ export class Board {
   private sel: Selection | null = null
   private swipeDx = 0
   private fingerTouch: { id: number; x: number; y: number; t: number } | null = null
+  /** new pen strokes waiting to be painted on top of the ink layer (no full redraw needed) */
+  private pendingInk: { page: string; s: Stroke }[] = []
+  private images = new Map<string, CanvasImageSource | 'loading' | 'error'>()
+  private imageLoader: ((path: string) => Promise<CanvasImageSource>) | null = null
 
   // remote (things the other device is doing)
   private remoteLive = new Map<string, RemoteLive>()
@@ -178,7 +197,18 @@ export class Board {
     this.livex = (this.live.getContext('2d', { desynchronized: true } as CanvasRenderingContext2DSettings) ??
       this.live.getContext('2d'))!
 
-    this.unsubInk = ink.subscribe(() => this.invalidate('bg', 'ink', 'live'))
+    this.unsubInk = ink.subscribe((page, _origin, patch) => {
+      // Plain new pen strokes are painted straight on top of the ink layer;
+      // anything else (erasing, moving, highlighter) redraws properly.
+      const simple = patch && !patch.remove.length && patch.add.every((st) => st.tool === 'pen')
+      if (simple && !this.dirty.ink && !this.hiddenIds(page) && !this.swipeDx) {
+        for (const st of patch.add) this.pendingInk.push({ page, s: st })
+      } else {
+        this.invalidate('ink')
+      }
+      if (!simple) this.invalidate('bg')
+      this.invalidate('live')
+    })
     this.ro = new ResizeObserver(() => this.resize())
     this.ro.observe(this.el)
     this.resize()
@@ -231,6 +261,27 @@ export class Board {
     this.pdf = p
     if (p) p.onReady = () => this.invalidate('bg')
     this.invalidate('bg')
+  }
+
+  /** How to fetch photo pages (they're stored as files). */
+  setImageLoader(fn: ((path: string) => Promise<CanvasImageSource>) | null) {
+    this.imageLoader = fn
+    this.invalidate('bg')
+  }
+
+  private image(path: string): CanvasImageSource | null {
+    const got = this.images.get(path)
+    if (got === 'loading' || got === 'error') return null
+    if (got) return got
+    if (!this.imageLoader) return null
+    this.images.set(path, 'loading')
+    this.imageLoader(path)
+      .then((img) => {
+        this.images.set(path, img)
+        this.invalidate('bg')
+      })
+      .catch(() => this.images.set(path, 'error'))
+    return null
   }
 
   getIndex() {
@@ -449,7 +500,7 @@ export class Board {
 
   remote(e: LiveEvent) {
     if (e.k === 'begin') {
-      this.remoteLive.set(e.id, { page: e.page, tool: e.tool, color: e.color, size: e.size, sim: e.sim, shape: false, pts: e.pts.slice(), shown: 0 })
+      this.remoteLive.set(e.id, { page: e.page, tool: e.tool, color: e.color, size: e.size, sim: e.sim, style: e.style, shape: false, pts: e.pts.slice(), shown: 0 })
     } else if (e.k === 'pts') {
       const l = this.remoteLive.get(e.id)
       if (l) l.pts.push(...e.pts)
@@ -543,17 +594,11 @@ export class Board {
   }
 
   private emitSelection() {
-    if (!this.sel) return
-    const box = this.boxes.find((b) => b.ref.id === this.sel!.page)
-    if (!box) return
-    const r = mapRect(this.sel.bbox, this.sel.m)
-    const z = this.cam.z
-    this.hooks.onSelection?.({
-      x: (box.x + r.x - this.cam.x) * z,
-      y: (box.y + r.y - this.cam.y) * z,
-      w: r.w * z,
-      h: r.h * z,
-    })
+    const c = this.selectionCorners()
+    if (!c) return
+    const xs = c.map((p) => p[0]), ys = c.map((p) => p[1])
+    const x = Math.min(...xs), y = Math.min(...ys)
+    this.hooks.onSelection?.({ x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y })
   }
 
   // ---------------------------------------------------------------- render loop
@@ -584,6 +629,7 @@ export class Board {
     }
     if (this.dirty.bg) this.renderBg()
     if (this.dirty.ink) this.renderInk()
+    else if (this.pendingInk.length) this.paintPending()
     if (this.dirty.live) this.renderLive(now)
   }
 
@@ -642,6 +688,13 @@ export class Board {
           const r = detail.rect
           ctx.drawImage(detail.canvas, sx + r.x * k, sy + r.y * k, r.w * k, r.h * k)
         }
+      } else if (b.ref.kind === 'image') {
+        const img = this.image(b.ref.path)
+        if (img) {
+          ctx.imageSmoothingEnabled = true
+          ctx.imageSmoothingQuality = 'high'
+          ctx.drawImage(img, sx, sy, sw, sh)
+        }
       } else if (b.ref.kind === 'paper') {
         ctx.save()
         this.pageTransform(ctx, b)
@@ -687,11 +740,11 @@ export class Board {
     const out: [string, Path2D][] = []
     const a = this.action
     if (a?.kind === 'draw' && a.stroke.tool === 'highlighter' && a.box.ref.id === page && a.stroke.pts.length) {
-      out.push([a.stroke.color, outlineToPath(outline(a.stroke, false))])
+      out.push([a.stroke.color, outlineToPath(outline(a.stroke))])
     }
     for (const l of this.remoteLive.values()) {
       if (l.tool !== 'highlighter' || l.page !== page || !l.shown) continue
-      out.push([l.color, outlineToPath(outline({ tool: l.tool, size: l.size, sim: l.sim, shape: l.shape, pts: l.pts.slice(0, l.shown) }, false))])
+      out.push([l.color, outlineToPath(outline({ tool: l.tool, size: l.size, sim: l.sim, shape: l.shape, pts: l.pts.slice(0, l.shown) }))])
     }
     return out
   }
@@ -702,8 +755,25 @@ export class Board {
     return null
   }
 
+  private paintPending() {
+    const ctx = this.inkx
+    const vis = this.visibleBoxes()
+    for (const { page, s } of this.pendingInk) {
+      const b = vis.find((x) => x.ref.id === page)
+      if (!b) continue
+      ctx.save()
+      this.pageTransform(ctx, b)
+      this.clipPage(ctx, b)
+      ctx.fillStyle = s.color
+      ctx.fill(strokePath(s))
+      ctx.restore()
+    }
+    this.pendingInk = []
+  }
+
   private renderInk() {
     this.dirty.ink = false
+    this.pendingInk = []
     const ctx = this.inkx
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, this.inkC.width, this.inkC.height)
@@ -761,7 +831,7 @@ export class Board {
       this.clipPage(ctx, a.box)
       ctx.fillStyle = a.stroke.color
       const pts = a.predicted.length ? a.stroke.pts.concat(a.predicted) : a.stroke.pts
-      ctx.fill(outlineToPath(outline({ ...a.stroke, pts }, false)))
+      ctx.fill(outlineToPath(outline({ ...a.stroke, pts })))
       ctx.restore()
     }
     if (a?.kind === 'draw' && a.stroke.tool === 'highlighter') this.dirty.bg = true
@@ -775,7 +845,7 @@ export class Board {
       this.pageTransform(ctx, b)
       this.clipPage(ctx, b)
       ctx.fillStyle = l.color
-      ctx.fill(outlineToPath(outline({ tool: l.tool, size: l.size, sim: l.sim, shape: l.shape, pts: l.pts.slice(0, l.shown) }, false)))
+      ctx.fill(outlineToPath(outline({ tool: l.tool, size: l.size, sim: l.sim, style: l.style, shape: l.shape, pts: l.pts.slice(0, l.shown) })))
       ctx.restore()
     }
 
@@ -796,24 +866,35 @@ export class Board {
       }
     }
     if (this.sel) {
-      const b = boxOf(this.sel.page)
-      if (b) {
-        const r = mapRect(this.sel.bbox, this.sel.m)
-        const k = z * dpr
-        const sx = (b.x + r.x - this.cam.x) * k, sy = (b.y + r.y - this.cam.y) * k
-        const pad = 6 * dpr
+      const c = this.selectionCorners()
+      if (c) {
         ctx.setTransform(1, 0, 0, 1, 0, 0)
         ctx.strokeStyle = '#2f5d8a'
         ctx.lineWidth = 1.5 * dpr
         ctx.setLineDash([5 * dpr, 4 * dpr])
-        ctx.strokeRect(sx - pad, sy - pad, r.w * k + pad * 2, r.h * k + pad * 2)
-        ctx.setLineDash([])
-        // resize handle, bottom right
-        const hx = sx + r.w * k + pad, hy = sy + r.h * k + pad
-        ctx.fillStyle = '#fffefa'
         ctx.beginPath()
-        ctx.arc(hx, hy, 7 * dpr, 0, Math.PI * 2)
-        ctx.fill()
+        c.forEach(([x, y], i) => (i ? ctx.lineTo(x * dpr, y * dpr) : ctx.moveTo(x * dpr, y * dpr)))
+        ctx.closePath()
+        ctx.stroke()
+        ctx.setLineDash([])
+        // rotate handle on a little stem, resize handle bottom right
+        const [rx, ry] = this.rotateHandle(c)
+        const mx = (c[0][0] + c[1][0]) / 2, my = (c[0][1] + c[1][1]) / 2
+        ctx.beginPath()
+        ctx.moveTo(mx * dpr, my * dpr)
+        ctx.lineTo(rx * dpr, ry * dpr)
+        ctx.stroke()
+        ctx.fillStyle = '#fffefa'
+        for (const [hx, hy] of [[rx, ry], c[2]]) {
+          ctx.beginPath()
+          ctx.arc(hx * dpr, hy * dpr, 7 * dpr, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.stroke()
+        }
+        // a tiny turning arrow inside the rotate handle
+        ctx.beginPath()
+        ctx.arc(rx * dpr, ry * dpr, 3.2 * dpr, -Math.PI * 0.9, Math.PI * 0.5)
+        ctx.lineWidth = 1.2 * dpr
         ctx.stroke()
       }
     }
@@ -894,7 +975,7 @@ export class Board {
         ctx.arc(x * dpr, y * dpr, t.eraserSize * dpr, 0, Math.PI * 2)
         ctx.stroke()
       } else if (!a && (t.tool === 'pen' || t.tool === 'highlighter')) {
-        const size = (t.tool === 'pen' ? t.penSize : t.hlSize) * z
+        const size = (t.tool === 'pen' ? t.penSize * (t.penStyle === 'felt' ? 0.85 : 1) : t.hlSize) * z
         ctx.fillStyle = t.tool === 'pen' ? t.penColor : t.hlColor
         ctx.globalAlpha = t.tool === 'pen' ? 0.55 : 0.5
         ctx.beginPath()
@@ -943,6 +1024,16 @@ export class Board {
           this.touchDown(e)
         }
         // Otherwise it's a palm resting while the pencil writes: ignore it.
+        return
+      }
+      // A finger on the selection moves it, like the pencil does.
+      if (this.sel && !this.touches.size && !this.gesture && this.selectionHit(sx, sy)) {
+        try {
+          this.el.setPointerCapture(e.pointerId)
+        } catch {
+          /* ignore */
+        }
+        this.startAction(e, sx, sy)
         return
       }
       if (!this.fingerDraw || this.touches.size || this.gesture) {
@@ -1026,7 +1117,7 @@ export class Board {
     if (e.pointerType !== 'pen') return 0.5
     const p = e.pressure || 0.5
     // Apple Pencil reports fairly low pressure for normal writing; lift it a little.
-    return Math.round(Math.min(1, Math.max(0.08, Math.pow(p, 0.8))) * 100) / 100
+    return Math.min(1, Math.max(0.08, Math.pow(p, 0.8)))
   }
 
   private startAction(e: PointerEvent, sx: number, sy: number) {
@@ -1035,10 +1126,10 @@ export class Board {
     // Barrel button on styluses that have one = temporary eraser.
     const tool = e.buttons & 32 ? 'eraser' : t.tool
 
-    if (this.sel && tool === 'lasso') {
+    if (this.sel && (tool === 'lasso' || e.pointerType === 'touch')) {
       const hit = this.selectionHit(sx, sy)
       if (hit) {
-        this.action = { kind: 'move', pointerId: e.pointerId, start: [sx, sy], scale: hit === 'handle', m0: this.sel.m.slice() }
+        this.action = { kind: 'move', pointerId: e.pointerId, start: [sx, sy], mode: hit === 'body' ? 'move' : hit, m0: this.sel.m.slice() }
         return
       }
     }
@@ -1050,18 +1141,20 @@ export class Board {
         this.action = { kind: 'none', pointerId: e.pointerId }
         return
       }
+      const p0 = this.pressure(e)
       const stroke: Stroke = {
         id: uid(),
         tool,
         color: tool === 'pen' ? t.penColor : t.hlColor,
         size: tool === 'pen' ? t.penSize : t.hlSize,
-        pts: [round1(dx - box.x), round1(dy - box.y), this.pressure(e)],
+        pts: [round1(dx - box.x), round1(dy - box.y), Math.round(p0 * 100) / 100],
         sim: e.pointerType !== 'pen' || undefined,
+        style: tool === 'pen' && t.penStyle === 'felt' ? 'felt' : undefined,
       }
-      const a: Action = { kind: 'draw', pointerId: e.pointerId, stroke, box, predicted: [], anchor: [sx, sy], holdTimer: 0, snapped: null, lastEmit: 0 }
+      const a: Action = { kind: 'draw', pointerId: e.pointerId, stroke, box, predicted: [], anchor: [sx, sy], holdTimer: 0, snapped: null, snapBase: null, ema: p0 }
       this.action = a
-      a.holdTimer = window.setTimeout(() => this.trySnap(), 520)
-      this.hooks.onLive?.({ k: 'begin', id: stroke.id, page: box.ref.id, tool, color: stroke.color, size: stroke.size, sim: !!stroke.sim, pts: stroke.pts.slice() })
+      if (t.snap) a.holdTimer = window.setTimeout(() => this.trySnap(), HOLD_MS)
+      this.hooks.onLive?.({ k: 'begin', id: stroke.id, page: box.ref.id, tool, color: stroke.color, size: stroke.size, sim: !!stroke.sim, style: stroke.style, pts: stroke.pts.slice() })
       this.invalidate('live')
       if (tool === 'highlighter') this.invalidate('bg')
     } else if (tool === 'eraser') {
@@ -1073,7 +1166,7 @@ export class Board {
         this.action = { kind: 'none', pointerId: e.pointerId }
         return
       }
-      this.action = { kind: 'lasso', pointerId: e.pointerId, box, poly: [dx - box.x, dy - box.y] }
+      this.action = { kind: 'lasso', pointerId: e.pointerId, box, poly: [dx - box.x, dy - box.y], travel: 0 }
     } else if (tool === 'laser') {
       this.action = { kind: 'laser', pointerId: e.pointerId }
       this.laserAt(dx, dy)
@@ -1085,19 +1178,30 @@ export class Board {
     const [sx, sy] = this.local(e)
     if (a.kind === 'draw') {
       if (a.snapped) {
+        const [dx, dy] = this.toDoc(sx, sy)
+        const at: [number, number] = [dx - a.box.x, dy - a.box.y]
         if (a.snapped.kind === 'line') {
-          const [dx, dy] = this.toDoc(sx, sy)
+          // keep dragging to swing the end of the line around
           const v = a.snapped.v
-          const end = snapLineEnd([v[0], v[1]], [dx - a.box.x, dy - a.box.y])
+          const end = snapLineEnd([v[0], v[1]], at)
           a.snapped = { kind: 'line', v: [v[0], v[1], end[0], end[1]] }
-          a.stroke = { ...a.stroke, pts: shapePoints(a.snapped) }
-          this.hooks.onLive?.({ k: 'replace', id: a.stroke.id, pts: a.stroke.pts, shape: true })
-          this.invalidate('live')
+        } else if (a.snapBase) {
+          // keep dragging to make the shape bigger or smaller
+          const c = shapeCenter(a.snapBase.shape)
+          const d0 = Math.hypot(a.snapBase.at[0] - c[0], a.snapBase.at[1] - c[1])
+          if (d0 < 4) return
+          const k = Math.max(0.2, Math.min(6, Math.hypot(at[0] - c[0], at[1] - c[1]) / d0))
+          a.snapped = scaleShape(a.snapBase.shape, k, c)
         }
+        a.stroke = { ...a.stroke, pts: shapePoints(a.snapped) }
+        this.hooks.onLive?.({ k: 'replace', id: a.stroke.id, pts: a.stroke.pts, shape: true })
+        this.invalidate('live')
+        if (a.stroke.tool === 'highlighter') this.invalidate('bg')
         return
       }
       const added: number[] = []
       const pts = a.stroke.pts
+      const pen = e.pointerType === 'pen'
       for (const ev of list) {
         const [lx, ly] = this.local(ev)
         const [dx, dy] = this.toDoc(lx, ly)
@@ -1105,7 +1209,13 @@ export class Board {
         const n = pts.length
         // Skip duplicate samples; they make perfect-freehand wobble.
         if (Math.abs(pts[n - 3] - x) < 0.15 && Math.abs(pts[n - 2] - y) < 0.15) continue
-        const p = this.pressure(ev)
+        // Smooth the pressure: raw Pencil pressure jitters, which shows up
+        // as lumpy line width.
+        const raw = this.pressure(ev)
+        a.ema = pen ? a.ema * 0.55 + raw * 0.45 : raw
+        const p = Math.round(a.ema * 100) / 100
+        // The very first sample's pressure is often off; borrow the second's.
+        if (n === 3) pts[2] = p
         pts.push(x, y, p)
         added.push(x, y, p)
       }
@@ -1114,15 +1224,15 @@ export class Board {
         for (const ev of e.getPredictedEvents().slice(0, 2)) {
           const [lx, ly] = this.local(ev)
           const [dx, dy] = this.toDoc(lx, ly)
-          a.predicted.push(dx - a.box.x, dy - a.box.y, this.pressure(ev))
+          a.predicted.push(dx - a.box.x, dy - a.box.y, Math.round(a.ema * 100) / 100)
         }
       }
       if (added.length) this.hooks.onLive?.({ k: 'pts', id: a.stroke.id, pts: added })
       // Restart the hold timer whenever the pencil really moves.
-      if (Math.hypot(sx - a.anchor[0], sy - a.anchor[1]) > 3) {
+      if (this.tools.snap && Math.hypot(sx - a.anchor[0], sy - a.anchor[1]) > 3) {
         a.anchor = [sx, sy]
         clearTimeout(a.holdTimer)
-        a.holdTimer = window.setTimeout(() => this.trySnap(), 520)
+        a.holdTimer = window.setTimeout(() => this.trySnap(), HOLD_MS)
       }
       this.invalidate('live')
     } else if (a.kind === 'erase') {
@@ -1134,23 +1244,14 @@ export class Board {
       const [dx, dy] = this.toDoc(sx, sy)
       const n = a.poly.length
       const x = dx - a.box.x, y = dy - a.box.y
-      if (Math.hypot(a.poly[n - 2] - x, a.poly[n - 1] - y) * this.cam.z > 2) a.poly.push(x, y)
+      const step = Math.hypot(a.poly[n - 2] - x, a.poly[n - 1] - y) * this.cam.z
+      if (step > 2) {
+        a.poly.push(x, y)
+        a.travel += step
+      }
       this.invalidate('live')
     } else if (a.kind === 'move' && this.sel) {
-      const z = this.cam.z
-      const ddx = (sx - a.start[0]) / z, ddy = (sy - a.start[1]) / z
-      if (a.scale) {
-        const b = this.sel.bbox
-        const r0 = mapRect(b, a.m0)
-        const s = Math.max(0.15, Math.min(8, (r0.w + ddx + r0.h + ddy) / (r0.w + r0.h)))
-        // scale around the top-left corner of the box as it was
-        const m = [a.m0[0] * s, 0, 0, a.m0[3] * s, 0, 0]
-        m[4] = r0.x - b.x * m[0]
-        m[5] = r0.y - b.y * m[3]
-        this.sel.m = m
-      } else {
-        this.sel.m = [a.m0[0], a.m0[1], a.m0[2], a.m0[3], a.m0[4] + ddx, a.m0[5] + ddy]
-      }
+      this.sel.m = this.dragTransform(a, sx, sy)
       this.hooks.onSelMove?.({ page: this.sel.page, ids: [...this.sel.ids], m: this.sel.m })
       this.emitSelection()
       this.invalidate('live')
@@ -1163,13 +1264,52 @@ export class Board {
     }
   }
 
+  /** The selection's new transform for a drag from `a.start` to (sx, sy). */
+  private dragTransform(a: Extract<Action, { kind: 'move' }>, sx: number, sy: number): number[] {
+    const sel = this.sel!
+    const b = this.boxes.find((x) => x.ref.id === sel.page)!
+    const z = this.cam.z
+    const [m0a, m0b, m0c, m0d, m0e, m0f] = a.m0
+    const toPage = (px: number, py: number): [number, number] => [px / z + this.cam.x - b.x, py / z + this.cam.y - b.y]
+    const [x0, y0] = toPage(a.start[0], a.start[1])
+    const [x1, y1] = toPage(sx, sy)
+    if (a.mode === 'move') return [m0a, m0b, m0c, m0d, m0e + x1 - x0, m0f + y1 - y0]
+
+    const bb = sel.bbox
+    if (a.mode === 'scale') {
+      // grow from the opposite (top-left) corner
+      const [px, py] = apply(a.m0, bb.x, bb.y)
+      const d0 = Math.hypot(x0 - px, y0 - py)
+      if (d0 < 1) return a.m0
+      const k = Math.max(0.15, Math.min(8, Math.hypot(x1 - px, y1 - py) / d0))
+      return [k * m0a, k * m0b, k * m0c, k * m0d, k * m0e + (1 - k) * px, k * m0f + (1 - k) * py]
+    }
+    // rotate around the middle, clicking into place at right angles
+    const [cx, cy] = apply(a.m0, bb.x + bb.w / 2, bb.y + bb.h / 2)
+    let th = Math.atan2(y1 - cy, x1 - cx) - Math.atan2(y0 - cy, x0 - cx)
+    const total = Math.atan2(m0b, m0a) + th
+    const right = Math.round(total / (Math.PI / 2)) * (Math.PI / 2)
+    if (Math.abs(total - right) < (5 * Math.PI) / 180) th += right - total
+    const cos = Math.cos(th), sin = Math.sin(th)
+    return [
+      cos * m0a - sin * m0b,
+      sin * m0a + cos * m0b,
+      cos * m0c - sin * m0d,
+      sin * m0c + cos * m0d,
+      cos * (m0e - cx) - sin * (m0f - cy) + cx,
+      sin * (m0e - cx) + cos * (m0f - cy) + cy,
+    ]
+  }
+
   private trySnap() {
     const a = this.action
     if (!a || a.kind !== 'draw' || a.snapped) return
     const shape = recognize(a.stroke.pts)
     if (!shape) return
     if (a.stroke.tool === 'highlighter' && shape.kind !== 'line') return
+    const n = a.stroke.pts.length
     a.snapped = shape
+    a.snapBase = { shape, at: [a.stroke.pts[n - 3], a.stroke.pts[n - 2]] }
     a.stroke = { ...a.stroke, pts: shapePoints(shape), shape: true }
     a.predicted = []
     this.hooks.onLive?.({ k: 'replace', id: a.stroke.id, pts: a.stroke.pts, shape: true })
@@ -1183,8 +1323,13 @@ export class Board {
     if (a.kind === 'draw') {
       clearTimeout(a.holdTimer)
       if (!cancel && a.stroke.pts.length >= 3) {
-        const page = a.box.ref.id
-        this.ink.commit({ page, remove: [], add: [a.stroke] })
+        let stroke = a.stroke
+        // Highlighting a line of text: straighten it out.
+        if (stroke.tool === 'highlighter' && !a.snapped && this.tools.hlStraight) {
+          const line = straighten(stroke.pts)
+          if (line) stroke = { ...stroke, pts: shapePoints(line), shape: true }
+        }
+        this.ink.commit({ page: a.box.ref.id, remove: [], add: [stroke] })
       }
       this.hooks.onLive?.({ k: 'end', id: a.stroke.id })
       this.invalidate('live', 'bg')
@@ -1193,9 +1338,23 @@ export class Board {
         this.ink.record({ page, remove: [...rec.created], add: [...rec.originals.values()] })
       }
     } else if (a.kind === 'lasso') {
-      if (!cancel && a.poly.length >= 6) {
-        const strokes = this.ink.get(a.box.ref.id).filter((s) => lassoContains(s, a.poly))
-        if (strokes.length) this.select(a.box.ref.id, strokes)
+      if (!cancel) {
+        const page = a.box.ref.id
+        if (a.travel < 10) {
+          // a tap with the lasso picks up just the stroke under it
+          const [x, y] = [a.poly[0], a.poly[1]]
+          const r = 10 / this.cam.z
+          const strokes = this.ink.get(page)
+          for (let i = strokes.length - 1; i >= 0; i--) {
+            if (strokeHit(strokes[i], x, y, r)) {
+              this.select(page, [strokes[i]])
+              break
+            }
+          }
+        } else if (a.poly.length >= 6) {
+          const strokes = this.ink.get(page).filter((st) => lassoContains(st, a.poly))
+          if (strokes.length) this.select(page, strokes)
+        }
       }
       this.invalidate('live')
     } else if (a.kind === 'move') {
@@ -1212,17 +1371,46 @@ export class Board {
     }
   }
 
-  private selectionHit(sx: number, sy: number): 'handle' | 'body' | null {
+  /** Corners of the selection box on screen (CSS px), padded a little, after its transform. */
+  private selectionCorners(): [number, number][] | null {
     const s = this.sel
     if (!s) return null
     const b = this.boxes.find((x) => x.ref.id === s.page)
     if (!b) return null
-    const r = mapRect(s.bbox, s.m)
     const z = this.cam.z
-    const x0 = (b.x + r.x - this.cam.x) * z - 6, y0 = (b.y + r.y - this.cam.y) * z - 6
-    const x1 = x0 + r.w * z + 12, y1 = y0 + r.h * z + 12
-    if (Math.hypot(sx - x1, sy - y1) < 22) return 'handle'
-    if (sx >= x0 - 8 && sx <= x1 + 8 && sy >= y0 - 8 && sy <= y1 + 8) return 'body'
+    const pad = 6 / z
+    const { x, y, w, h } = s.bbox
+    return ([
+      [x - pad, y - pad],
+      [x + w + pad, y - pad],
+      [x + w + pad, y + h + pad],
+      [x - pad, y + h + pad],
+    ] as [number, number][]).map(([px, py]) => {
+      const [tx, ty] = apply(s.m, px, py)
+      return [(b.x + tx - this.cam.x) * z, (b.y + ty - this.cam.y) * z]
+    })
+  }
+
+  /** Where the rotate handle sits: a little way out from the middle of the top edge. */
+  private rotateHandle(c: [number, number][]): [number, number] {
+    const mx = (c[0][0] + c[1][0]) / 2, my = (c[0][1] + c[1][1]) / 2
+    const cx = (c[0][0] + c[2][0]) / 2, cy = (c[0][1] + c[2][1]) / 2
+    const d = Math.hypot(mx - cx, my - cy) || 1
+    return [mx + ((mx - cx) / d) * 26, my + ((my - cy) / d) * 26]
+  }
+
+  private selectionHit(sx: number, sy: number): 'scale' | 'rotate' | 'body' | null {
+    const c = this.selectionCorners()
+    if (!c) return null
+    if (Math.hypot(sx - c[2][0], sy - c[2][1]) < 22) return 'scale'
+    const [rx, ry] = this.rotateHandle(c)
+    if (Math.hypot(sx - rx, sy - ry) < 22) return 'rotate'
+    if (pointInPolygon(sx, sy, c.flat())) return 'body'
+    // a little slack around the edges
+    for (let i = 0; i < 4; i++) {
+      const [ax, ay] = c[i], [bx, by] = c[(i + 1) % 4]
+      if (segDistance(sx, sy, ax, ay, bx, by) < 10) return 'body'
+    }
     return null
   }
 
@@ -1256,7 +1444,9 @@ export class Board {
         a.perPage.set(page, rec)
       }
       const patch: Patch = { page, remove: [], add: [] }
+      const hlOnly = this.tools.eraserHighlightOnly
       for (const s of this.ink.get(page)) {
+        if (hlOnly && s.tool !== 'highlighter') continue
         if (precise) {
           const pieces = eraseFrom(s, px, py, r, uid)
           if (!pieces) continue
@@ -1514,12 +1704,15 @@ function centroid(pts: { x: number; y: number }[]): [number, number] {
   return [x / pts.length, y / pts.length]
 }
 
-function mapRect(r: Rect, m: number[]): Rect {
-  const x0 = m[0] * r.x + m[2] * r.y + m[4]
-  const y0 = m[1] * r.x + m[3] * r.y + m[5]
-  const x1 = m[0] * (r.x + r.w) + m[2] * (r.y + r.h) + m[4]
-  const y1 = m[1] * (r.x + r.w) + m[3] * (r.y + r.h) + m[5]
-  return { x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) }
+function apply(m: number[], x: number, y: number): [number, number] {
+  return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
+}
+
+function segDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
+  const dx = bx - ax, dy = by - ay
+  const l2 = dx * dx + dy * dy
+  const t = l2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0
+  return Math.hypot(ax + t * dx - px, ay + t * dy - py)
 }
 
 function isIdentity(m: number[]) {

@@ -206,3 +206,39 @@ export function shapePoints(s: Shape, pressure = 0.5): number[] {
   if (s.kind === 'polygon') seg(v[(count - 1) * 2], v[(count - 1) * 2 + 1], v[0], v[1], false)
   return out
 }
+
+/** Highlighter helper: is this stroke meant to be a straight line? */
+export function straighten(flat: number[]): Shape | null {
+  const pts = toPoints(flat)
+  if (pts.length < 2) return null
+  const first = pts[0], last = pts[pts.length - 1]
+  const chord = dist(first, last)
+  if (chord < 25) return null
+  let maxDev = 0
+  for (const p of pts) maxDev = Math.max(maxDev, segDist(p, first, last))
+  if (maxDev > Math.max(6, chord * 0.12)) return null
+  const end = snapAngle(first, last)
+  return { kind: 'line', v: [first[0], first[1], end[0], end[1]] }
+}
+
+export function shapeCenter(s: Shape): [number, number] {
+  if (s.kind === 'ellipse') return [s.v[0], s.v[1]]
+  let x = 0, y = 0
+  const n = s.v.length / 2
+  for (let i = 0; i < s.v.length; i += 2) {
+    x += s.v[i]
+    y += s.v[i + 1]
+  }
+  return [x / n, y / n]
+}
+
+/** Grow or shrink a shape around a centre point. */
+export function scaleShape(s: Shape, k: number, c: [number, number]): Shape {
+  if (s.kind === 'ellipse') return { kind: 'ellipse', v: [s.v[0], s.v[1], s.v[2] * k, s.v[3] * k] }
+  const v = s.v.slice()
+  for (let i = 0; i < v.length; i += 2) {
+    v[i] = c[0] + (v[i] - c[0]) * k
+    v[i + 1] = c[1] + (v[i + 1] - c[1]) * k
+  }
+  return { kind: s.kind, v }
+}

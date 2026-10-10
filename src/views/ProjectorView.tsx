@@ -4,7 +4,7 @@ import type { Backend } from '../lib/backend'
 import { pref, setPref } from '../lib/config'
 import type { Hub } from '../lib/hub'
 import { uid } from '../lib/ids'
-import { fileUrl } from '../lib/lessons'
+import { fileUrl, loadImage } from '../lib/lessons'
 import type { Session } from '../lib/session'
 import type { PodType } from '../lib/types'
 import { newPod, POD_TYPE_LABEL } from '../pods/defaults'
@@ -48,6 +48,7 @@ export function ProjectorView({ session, hub, backend, onExit }: Props) {
     })
     boardRef.current = b
     b.setPdf(session.pdf)
+    b.setImageLoader((path) => fileUrl(backend, path).then(loadImage))
     b.setDocument(session.lesson.pages, session.lesson.layout, session.padView?.index ?? pref(`page.${id}`, 0))
     if (session.padView) b.follow(session.padView)
     // tell the iPad how big we are so it can show what the class sees
@@ -66,7 +67,7 @@ export function ProjectorView({ session, hub, backend, onExit }: Props) {
       b.destroy()
       boardRef.current = null
     }
-  }, [session, hub])
+  }, [session, hub, backend])
 
   useEffect(() => {
     boardRef.current?.setDocument(lesson.pages, lesson.layout)
