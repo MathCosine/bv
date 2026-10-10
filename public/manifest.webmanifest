@@ -1,0 +1,16 @@
+{
+  "name": "Overhead",
+  "short_name": "Overhead",
+  "description": "Your slides on the projector, your Apple Pencil on the iPad.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f2e9",
+  "theme_color": "#f6f2e9",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
